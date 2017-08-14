@@ -14,6 +14,7 @@ type Cron struct {
 	entries  []*Entry
 	stop     chan struct{}
 	add      chan *Entry
+	remove   chan *Entry
 	snapshot chan []*Entry
 	running  bool
 	ErrorLog *log.Logger
@@ -21,8 +22,9 @@ type Cron struct {
 }
 
 // Job is an interface for submitted cron jobs.
-type Job interface {
-	Run()
+type Job struct {
+	count	int
+	Run func()
 }
 
 // The Schedule describes a job's duty cycle.
@@ -78,6 +80,7 @@ func NewWithLocation(location *time.Location) *Cron {
 	return &Cron{
 		entries:  nil,
 		add:      make(chan *Entry),
+		remove:   make(chan *Entry),
 		stop:     make(chan struct{}),
 		snapshot: make(chan []*Entry),
 		running:  false,
@@ -86,39 +89,58 @@ func NewWithLocation(location *time.Location) *Cron {
 	}
 }
 
-// A wrapper that turns a func() into a cron.Job
-type FuncJob func()
-
-func (f FuncJob) Run() { f() }
-
-// AddFunc adds a func to the Cron to be run on the given schedule.
-func (c *Cron) AddFunc(spec string, cmd func()) error {
-	return c.AddJob(spec, FuncJob(cmd))
-}
+//// A wrapper that turns a func() into a cron.Job
+//type FuncJob func()
+//
+//func (f FuncJob) Run() { f() }
+//
+//// AddFunc adds a func to the Cron to be run on the given schedule.
+//func (c *Cron) AddFunc(spec string, cmd func()) (error, *Entry) {
+//	return c.AddJob(spec, FuncJob(cmd))
+//}
 
 // AddJob adds a Job to the Cron to be run on the given schedule.
-func (c *Cron) AddJob(spec string, cmd Job) error {
+func (c *Cron) AddJob(spec string, cmd Job) (error, *Entry){
 	schedule, err := Parse(spec)
 	if err != nil {
-		return err
+		return err, nil
 	}
-	c.Schedule(schedule, cmd)
-	return nil
+	return nil, c.Schedule(schedule, cmd)
 }
 
 // Schedule adds a Job to the Cron to be run on the given schedule.
-func (c *Cron) Schedule(schedule Schedule, cmd Job) {
+func (c *Cron) Schedule(schedule Schedule, cmd Job) *Entry{
 	entry := &Entry{
 		Schedule: schedule,
 		Job:      cmd,
 	}
 	if !c.running {
 		c.entries = append(c.entries, entry)
+		return entry
+	}
+	c.add <- entry
+	return entry
+}
+
+// Schedule adds a Job to the Cron to be run on the given schedule.
+func (c *Cron) RemoveSchedule(entry *Entry) {
+	if !c.running {
+		c.entries = remove(c.entries, entry)
 		return
 	}
-
-	c.add <- entry
+	c.remove <- entry
 }
+
+//删除函数
+func remove(s [] *Entry, entry *Entry) []*Entry {
+	for index := range s{
+		if s[index] == entry {
+			return append(s[:index], s[index+1:]...)
+		}
+	}
+	return nil
+}
+
 
 // Entries returns a snapshot of the cron entries.
 func (c *Cron) Entries() []*Entry {
@@ -196,9 +218,12 @@ func (c *Cron) run() {
 					if e.Next.After(now) || e.Next.IsZero() {
 						break
 					}
-					go c.runWithRecovery(e.Job)
-					e.Prev = e.Next
-					e.Next = e.Schedule.Next(now)
+					if e.Job.count == -1 {
+						go c.runWithRecovery(e.Job)
+						e.Prev = e.Next
+						e.Next = e.Schedule.Next(now)
+					}
+
 				}
 
 			case newEntry := <-c.add:
@@ -206,6 +231,10 @@ func (c *Cron) run() {
 				now = c.now()
 				newEntry.Next = newEntry.Schedule.Next(now)
 				c.entries = append(c.entries, newEntry)
+
+			case removeEntry := <-c.remove:
+				timer.Stop()
+				c.entries = remove(c.entries, removeEntry)
 
 			case <-c.snapshot:
 				c.snapshot <- c.entrySnapshot()
