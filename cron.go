@@ -23,7 +23,7 @@ type Cron struct {
 
 // Job is an interface for submitted cron jobs.
 type Job struct {
-	count	int
+	Count	int
 	Run func()
 }
 
@@ -218,14 +218,20 @@ func (c *Cron) run() {
 					if e.Next.After(now) || e.Next.IsZero() {
 						break
 					}
-					if e.Job.count == -1 {
+					if e.Job.Count == -1 {
 						go c.runWithRecovery(e.Job)
 						e.Prev = e.Next
 						e.Next = e.Schedule.Next(now)
+					} else if e.Job.Count > 0 {
+						go c.runWithRecovery(e.Job)
+						e.Prev = e.Next
+						e.Next = e.Schedule.Next(now)
+						e.Job.Count --
+					} else {
+						timer.Stop()
+						c.entries = remove(c.entries, e)
 					}
-
 				}
-
 			case newEntry := <-c.add:
 				timer.Stop()
 				now = c.now()
