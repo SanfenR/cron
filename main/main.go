@@ -30,6 +30,8 @@ func main() {
 			j ++
 		},
 	})
+
+	//开始执行cron
 	c.Start()
 
 	time.Sleep(time.Second * 10)
@@ -46,6 +48,11 @@ func main() {
 	//移除任务1
 	c.RemoveSchedule(job1)
 
+
+	time.Sleep(time.Second * 20)
+
+	//关闭执行cron
+	c.Stop()
 
 	select {}
 }
